@@ -12,6 +12,7 @@ pub type F = GoldilocksField;
 
 #[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 pub struct Hash(pub [F; 4]);
+pub const NULL: Hash = Hash([F::ZERO, F::ZERO, F::ZERO, F::ZERO]);
 
 impl fmt::Display for Hash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -47,6 +48,8 @@ impl fmt::Display for PodId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if *self == SELF {
             write!(f, "self")
+        } else if self.0 == NULL {
+            write!(f, "null")
         } else {
             write!(f, "{}", self.0)
         }

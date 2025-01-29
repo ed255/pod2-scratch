@@ -135,7 +135,7 @@ impl SignedPod {
 pub struct MainPod {
     pub params: Params,
     pub id: PodId,
-    pub input_signed_pods: Vec<Option<SignedPod>>,
+    pub input_signed_pods: Vec<SignedPod>,
     pub statements: Vec<Statement>,
 }
 
@@ -155,20 +155,24 @@ impl MainPod {
         Statement(NativeStatement::None, args)
     }
 
-    fn pad_statements(params: &Params, statements: &mut Vec<Statement>) {
-        fill_pad(
-            statements,
-            Self::statement_none(params),
-            params.max_statements,
-        )
+    fn pad_statements(params: &Params, statements: &mut Vec<Statement>, len: usize) {
+        for st in statements.iter_mut() {
+            fill_pad(&mut st.1, StatementArg::None, params.max_statement_args)
+        }
+        fill_pad(statements, Self::statement_none(params), len)
     }
 
     fn pad_statement_args(params: &Params, args: &mut Vec<StatementArg>) {
         fill_pad(args, StatementArg::None, params.max_statement_args)
     }
 
-    fn pad_input_signed_pods(params: &Params, pods: &mut Vec<Option<SignedPod>>) {
-        fill_pad(pods, None, params.max_input_signed_pods)
+    fn pad_input_signed_pods(params: &Params, pods: &mut Vec<SignedPod>) {
+        let pod_none = SignedPod {
+            params: params.clone(),
+            id: PodId::default(),
+            kvs: HashMap::new(),
+        };
+        fill_pad(pods, pod_none, params.max_input_signed_pods)
     }
 
     pub fn compile(params: Params, pod: &frontend::MainPod) -> Self {
@@ -187,7 +191,6 @@ impl MainPod {
                             StatementArg::Ref(AnchoredKey(SELF, key_hash)),
                             StatementArg::Literal(Value::from(v)),
                         ];
-                        Self::pad_statement_args(&params, &mut value_of_args);
                         statements.push(Statement(NativeStatement::ValueOf, value_of_args));
                         AnchoredKey(SELF, key_hash)
                     }
@@ -198,17 +201,16 @@ impl MainPod {
                     panic!("too many statement args");
                 }
             }
-            Self::pad_statement_args(&params, &mut args);
             statements.push(Statement(NativeStatement::from(*front_typ), args));
             if statements.len() > params.max_statements {
                 panic!("too many statements");
             }
         }
-        Self::pad_statements(&params, &mut statements);
+        Self::pad_statements(&params, &mut statements, params.max_statements);
         let mut input_signed_pods = pod
             .input_signed_pods
             .iter()
-            .map(|p| Some(SignedPod::compile(params, p)))
+            .map(|p| SignedPod::compile(params, p))
             .collect();
         Self::pad_input_signed_pods(&params, &mut input_signed_pods);
         Self {
@@ -226,30 +228,25 @@ impl MainPod {
     pub fn input_signed_pods_statements(&self) -> Vec<Vec<Statement>> {
         let mut pods_statements = Vec::new();
         let st_none = Self::statement_none(&self.params);
+        for pod in &self.input_signed_pods {
+            let mut pod_statements: Vec<Statement> = Vec::new();
+            for kv in &pod.kvs {
+                let args = vec![
+                    StatementArg::Ref(AnchoredKey(pod.id, *kv.0)),
+                    StatementArg::Literal(*kv.1),
+                ];
+                pod_statements.push(Statement(NativeStatement::ValueOf, args));
+            }
+            Self::pad_statements(
+                &self.params,
+                &mut pod_statements,
+                self.params.max_signed_pod_values,
+            );
+            pods_statements.push(pod_statements);
+        }
         let statements_none: Vec<Statement> = iter::repeat(st_none.clone())
             .take(self.params.max_signed_pod_values)
             .collect();
-        for pod in &self.input_signed_pods {
-            let mut pod_statements: Vec<Statement> = Vec::new();
-            if let Some(pod) = pod {
-                for kv in &pod.kvs {
-                    let mut args = vec![
-                        StatementArg::Ref(AnchoredKey(pod.id, *kv.0)),
-                        StatementArg::Literal(*kv.1),
-                    ];
-                    Self::pad_statement_args(&self.params, &mut args);
-                    pod_statements.push(Statement(NativeStatement::ValueOf, args));
-                }
-                fill_pad(
-                    &mut pod_statements,
-                    st_none.clone(),
-                    self.params.max_signed_pod_values,
-                );
-            } else {
-                pod_statements = statements_none.clone();
-            }
-            pods_statements.push(pod_statements);
-        }
         fill_pad(
             &mut pods_statements,
             statements_none,
@@ -320,31 +317,20 @@ impl Printer {
 
     pub fn fmt_main_pod(&self, pod: &MainPod, w: &mut dyn Write) -> io::Result<()> {
         writeln!(w, "MainPod ({}):", pod.id)?;
-        // writeln!(w, "  in sig_pods:")?;
-        // for (i, in_pod) in pod.input_signed_pods.iter().enumerate() {
-        //     if let Some(in_pod) = in_pod {
-        //         writeln!(w, "    {:02}. {}", i, in_pod.id)?;
-        //     } else {
-        //         writeln!(w, "    {:02}. none", i)?;
-        //     }
-        // }
         // TODO
         // writeln!(w, "  input_main_pods:")?;
         // for in_pod in &pod.input_main_pods {
         //     writeln!(w, "    - {}", in_pod.id)?;
         // }
         let mut st_index = 0;
-        for (i, pod_statements) in pod.input_signed_pods_statements().iter().enumerate() {
-            writeln!(
-                w,
-                "  in sig_pod {:02} (id:{}) statements:",
-                i,
-                pod.input_signed_pods[i]
-                    .as_ref()
-                    .map(|p| p.id)
-                    .unwrap_or_default()
-            )?;
-            for st in pod_statements {
+        for (i, (pod, statements)) in pod
+            .input_signed_pods
+            .iter()
+            .zip(pod.input_signed_pods_statements())
+            .enumerate()
+        {
+            writeln!(w, "  in sig_pod {:02} (id:{}) statements:", i, pod.id)?;
+            for st in statements {
                 self.fmt_statement_index(&st, st_index, w)?;
                 st_index += 1;
             }
