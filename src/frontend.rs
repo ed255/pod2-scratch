@@ -5,36 +5,7 @@ use std::convert::From;
 use std::fmt;
 use std::io::{self, Write};
 
-#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
-pub struct Hash(pub [u8; 32]);
-
-impl fmt::Display for Hash {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for b in &self.0[..4] {
-            write!(f, "{:02x}", b)?;
-        }
-        Ok(())
-    }
-}
-
-impl FromHex for Hash {
-    type Error = FromHexError;
-
-    fn from_hex<T: AsRef<[u8]>>(hex: T) -> Result<Self, Self::Error> {
-        Ok(Self(<[u8; 32]>::from_hex(hex)?))
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
-pub struct PodId(pub Hash);
-
-pub const SELF: PodId = PodId(Hash([0; 32]));
-
-impl fmt::Display for PodId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "pod_id:{}", self.0)
-    }
-}
+use crate::{hash_str, Hash, PodId, F, SELF};
 
 #[derive(Clone, Debug, Default, Hash, PartialEq, Eq)]
 pub enum PodType {
@@ -216,7 +187,7 @@ impl Printer {
     }
 
     pub fn fmt_signed_pod(&self, pod: &SignedPod, w: &mut dyn Write) -> io::Result<()> {
-        writeln!(w, "SignedPod ({}):", pod.id)?;
+        writeln!(w, "SignedPod (id:{}):", pod.id)?;
         for (k, v) in pod.kvs.iter().sorted_by_key(|kv| kv.0) {
             println!("  - {}: {}", k, v);
         }
@@ -224,7 +195,7 @@ impl Printer {
     }
 
     pub fn fmt_main_pod(&self, pod: &MainPod, w: &mut dyn Write) -> io::Result<()> {
-        writeln!(w, "MainPod ({}):", pod.id)?;
+        writeln!(w, "MainPod (id:{}):", pod.id)?;
         writeln!(w, "  input_signed_pods:")?;
         for in_pod in &pod.input_signed_pods {
             writeln!(w, "    - {}", in_pod.id)?;
@@ -279,7 +250,7 @@ pub mod tests {
         kvs.insert("dateOfBirth".into(), 1169909384.into());
         kvs.insert("socialSecurityNumber".into(), "G2121210".into());
         let gov_id = SignedPod {
-            id: pod_id("1000000000000000000000000000000000000000000000000000000000000000"),
+            id: pod_id("1100000000000000000000000000000000000000000000000000000000000000"),
             kvs,
         };
 
@@ -287,7 +258,7 @@ pub mod tests {
         kvs.insert("socialSecurityNumber".into(), "G2121210".into());
         kvs.insert("startDate".into(), 1706367566.into());
         let pay_stub = SignedPod {
-            id: pod_id("2000000000000000000000000000000000000000000000000000000000000000"),
+            id: pod_id("2200000000000000000000000000000000000000000000000000000000000000"),
             kvs,
         };
 
@@ -306,7 +277,7 @@ pub mod tests {
             st!(eq, (pay_stub.origin(), "startDate"), now_minus_1y),
         ]);
         let kyc = MainPod {
-            id: pod_id("3000000000000000000000000000000000000000000000000000000000000000"),
+            id: pod_id("3300000000000000000000000000000000000000000000000000000000000000"),
             input_signed_pods: vec![gov_id.clone(), pay_stub.clone()],
             input_main_pods: vec![],
             statements,
