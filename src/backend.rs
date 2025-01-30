@@ -180,14 +180,14 @@ impl MainPod {
         let mut const_cnt = 0;
         for front_st in &pod.statements {
             let mut args = Vec::new();
-            let frontend::Statement(front_typ, front_args) = front_st;
+            let frontend::Statement(front_typ, front_args) = &front_st.0;
             for front_arg in front_args {
                 let key = match front_arg {
                     frontend::StatementArg::Literal(v) => {
                         let key = format!("_c{}", const_cnt);
                         let key_hash = hash_str(&key);
                         const_cnt += 1;
-                        let mut value_of_args = vec![
+                        let value_of_args = vec![
                             StatementArg::Ref(AnchoredKey(SELF, key_hash)),
                             StatementArg::Literal(Value::from(v)),
                         ];

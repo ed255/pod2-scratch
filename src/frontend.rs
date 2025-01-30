@@ -110,6 +110,12 @@ impl From<(Origin, &str)> for StatementArg {
     }
 }
 
+impl From<(&SignedPod, &str)> for StatementArg {
+    fn from((pod, key): (&SignedPod, &str)) -> Self {
+        StatementArg::Ref(AnchoredKey(pod.origin(), key.to_string()))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Statement(pub NativeStatement, pub Vec<StatementArg>);
 
@@ -129,8 +135,11 @@ impl MainPodBuilder {
             id: PodId::default(),      // TODO
             input_signed_pods: vec![], // TODO
             input_main_pods: vec![],   // TODO
-            statements: self.statements,
-            // operations: self.operations, // TODO
+            statements: self
+                .statements
+                .into_iter()
+                .zip(self.operations.into_iter())
+                .collect(),
         }
     }
 }
@@ -140,7 +149,7 @@ pub struct MainPod {
     pub id: PodId,
     pub input_signed_pods: Vec<SignedPod>,
     pub input_main_pods: Vec<MainPod>,
-    pub statements: Vec<Statement>,
+    pub statements: Vec<(Statement, Operation)>,
 }
 
 impl MainPod {
@@ -151,20 +160,10 @@ impl MainPod {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NativeOperation {
-    NewEntry = 1,
-    CopyStatement,
-    EqualityFromEntries,
-    NonequalityFromEntries,
-    GtFromEntries,
-    LtFromEntries,
-    TransitiveEqualityFromStatements,
-    GtToNonequality,
-    LtToNonequality,
-    ContainsFromEntries,
-    RenameContainedBy,
-    SumOf,
-    ProductOf,
-    MaxOf,
+    TransitiveEqualityFromStatements = 1,
+    GtToNonequality = 2,
+    LtToNonequality = 3,
+    Auto = 1024,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -179,14 +178,43 @@ pub struct Operation(pub NativeOperation, pub Vec<OperationArg>);
 pub struct Printer {}
 
 impl Printer {
-    pub fn fmt_arg(&self, arg: &StatementArg, w: &mut dyn Write) -> io::Result<()> {
+    pub fn fmt_st_arg(&self, w: &mut dyn Write, arg: &StatementArg) -> io::Result<()> {
         match arg {
             StatementArg::Literal(v) => write!(w, "{}", v),
             StatementArg::Ref(r) => write!(w, "{}.{}", r.0 .1, r.1),
         }
     }
 
-    pub fn fmt_signed_pod(&self, pod: &SignedPod, w: &mut dyn Write) -> io::Result<()> {
+    pub fn fmt_st(&self, w: &mut dyn Write, st: &Statement) -> io::Result<()> {
+        write!(w, "{:?} ", st.0)?;
+        for (i, arg) in st.1.iter().enumerate() {
+            if i != 0 {
+                write!(w, " ")?;
+            }
+            self.fmt_st_arg(w, arg)?;
+        }
+        Ok(())
+    }
+
+    pub fn fmt_op_arg(&self, w: &mut dyn Write, arg: &OperationArg) -> io::Result<()> {
+        match arg {
+            OperationArg::Statement(s) => self.fmt_st(w, s),
+            OperationArg::Key(r) => write!(w, "{}.{}", r.0 .1, r.1),
+        }
+    }
+
+    pub fn fmt_op(&self, w: &mut dyn Write, op: &Operation) -> io::Result<()> {
+        write!(w, "{:?} ", op.0)?;
+        for (i, arg) in op.1.iter().enumerate() {
+            if i != 0 {
+                write!(w, " ")?;
+            }
+            self.fmt_op_arg(w, arg)?;
+        }
+        Ok(())
+    }
+
+    pub fn fmt_signed_pod(&self, w: &mut dyn Write, pod: &SignedPod) -> io::Result<()> {
         writeln!(w, "SignedPod (id:{}):", pod.id)?;
         for (k, v) in pod.kvs.iter().sorted_by_key(|kv| kv.0) {
             println!("  - {}: {}", k, v);
@@ -194,7 +222,7 @@ impl Printer {
         Ok(())
     }
 
-    pub fn fmt_main_pod(&self, pod: &MainPod, w: &mut dyn Write) -> io::Result<()> {
+    pub fn fmt_main_pod(&self, w: &mut dyn Write, pod: &MainPod) -> io::Result<()> {
         writeln!(w, "MainPod (id:{}):", pod.id)?;
         writeln!(w, "  input_signed_pods:")?;
         for in_pod in &pod.input_signed_pods {
@@ -206,13 +234,11 @@ impl Printer {
         }
         writeln!(w, "  statements:")?;
         for st in &pod.statements {
-            write!(w, "    - {:?} ", st.0)?;
-            for (i, arg) in st.1.iter().enumerate() {
-                if i != 0 {
-                    write!(w, " ")?;
-                }
-                self.fmt_arg(arg, w)?;
-            }
+            let (st, op) = st;
+            write!(w, "    - ")?;
+            self.fmt_st(w, st)?;
+            write!(w, " <- ",)?;
+            self.fmt_op(w, op)?;
             write!(w, "\n")?;
         }
         Ok(())
@@ -226,6 +252,10 @@ pub mod tests {
 
     fn pod_id(hex: &str) -> PodId {
         PodId(Hash::from_hex(hex).unwrap())
+    }
+
+    fn auto() -> Operation {
+        Operation(NativeOperation::Auto, vec![])
     }
 
     macro_rules! args {
@@ -265,17 +295,21 @@ pub mod tests {
         let sanction_list = Value::MerkleTree(MerkleTree { root: 1 });
         let now_minus_18y: i64 = 1169909388;
         let now_minus_1y: i64 = 1706367566;
-        let mut statements = Vec::new();
-        statements.extend_from_slice(&[
-            st!(not_contains, sanction_list, (gov_id.origin(), "idNumber")),
-            st!(lt, (gov_id.origin(), "dateOfBirth"), now_minus_18y),
+        let mut statements: Vec<(Statement, Operation)> = Vec::new();
+        statements.push((
+            st!(not_contains, sanction_list, (&gov_id, "idNumber")),
+            auto(),
+        ));
+        statements.push((st!(lt, (&gov_id, "dateOfBirth"), now_minus_18y), auto()));
+        statements.push((
             st!(
                 eq,
-                (gov_id.origin(), "socialSecurityNumber"),
-                (pay_stub.origin(), "socialSecurityNumber",)
+                (&gov_id, "socialSecurityNumber"),
+                (&pay_stub, "socialSecurityNumber")
             ),
-            st!(eq, (pay_stub.origin(), "startDate"), now_minus_1y),
-        ]);
+            auto(),
+        ));
+        statements.push((st!(eq, (&pay_stub, "startDate"), now_minus_1y), auto()));
         let kyc = MainPod {
             id: pod_id("3300000000000000000000000000000000000000000000000000000000000000"),
             input_signed_pods: vec![gov_id.clone(), pay_stub.clone()],
@@ -292,8 +326,8 @@ pub mod tests {
 
         let printer = Printer {};
         let mut w = io::stdout();
-        printer.fmt_signed_pod(&gov_id, &mut w).unwrap();
-        printer.fmt_signed_pod(&pay_stub, &mut w).unwrap();
-        printer.fmt_main_pod(&kyc, &mut w).unwrap();
+        printer.fmt_signed_pod(&mut w, &gov_id).unwrap();
+        printer.fmt_signed_pod(&mut w, &pay_stub).unwrap();
+        printer.fmt_main_pod(&mut w, &kyc).unwrap();
     }
 }
