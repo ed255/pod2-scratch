@@ -1,44 +1,11 @@
-use itertools::Itertools;
 use plonky2::field::types::{Field, PrimeField64};
-use plonky2::hash::{hash_types::HashOut, poseidon::PoseidonHash};
-use plonky2::plonk::config::Hasher;
 use std::collections::HashMap;
 use std::fmt;
 use std::io::{self, Write};
 use std::iter;
 use strum_macros::FromRepr;
 
-use crate::frontend;
-use crate::{hash_str, Hash, PodId, F, SELF};
-
-#[derive(Clone, Debug, Copy)]
-pub struct Params {
-    pub max_input_signed_pods: usize,
-    pub max_input_main_pods: usize,
-    pub max_statements: usize,
-    pub max_signed_pod_values: usize,
-    pub max_public_statements: usize,
-    pub max_statement_args: usize,
-}
-
-impl Params {
-    pub fn max_priv_statements(&self) -> usize {
-        self.max_statements - self.max_public_statements
-    }
-}
-
-impl Default for Params {
-    fn default() -> Self {
-        Self {
-            max_input_signed_pods: 3,
-            max_input_main_pods: 3,
-            max_statements: 20,
-            max_signed_pod_values: 8,
-            max_public_statements: 10,
-            max_statement_args: 5,
-        }
-    }
-}
+use crate::{Hash, Params, PodId, F};
 
 #[derive(Clone, Copy, Debug, FromRepr, PartialEq, Eq)]
 pub enum NativeStatement {
@@ -55,12 +22,6 @@ pub enum NativeStatement {
     MaxOf,
 }
 
-impl From<frontend::NativeStatement> for NativeStatement {
-    fn from(v: frontend::NativeStatement) -> Self {
-        Self::from_repr(v as usize).unwrap()
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 pub struct Value(pub [F; 4]);
 
@@ -75,24 +36,6 @@ impl fmt::Display for Value {
         } else {
             // Assume this is a hash
             Hash(self.0).fmt(f)
-        }
-    }
-}
-
-impl From<&frontend::Value> for Value {
-    fn from(v: &frontend::Value) -> Self {
-        match v {
-            frontend::Value::String(s) => Self(hash_str(s).0),
-            frontend::Value::Int(v) => {
-                Value([F::from_canonical_u64(*v as u64), F::ZERO, F::ZERO, F::ZERO])
-            }
-            // TODO
-            frontend::Value::MerkleTree(mt) => Value([
-                F::from_canonical_u64(mt.root as u64),
-                F::ZERO,
-                F::ZERO,
-                F::ZERO,
-            ]),
         }
     }
 }
@@ -117,20 +60,6 @@ pub struct SignedPod {
     pub kvs: HashMap<Hash, Value>,
 }
 
-impl SignedPod {
-    pub fn compile(params: Params, pod: &frontend::SignedPod) -> Self {
-        Self {
-            params,
-            id: pod.id,
-            kvs: pod
-                .kvs
-                .iter()
-                .map(|(k, v)| (hash_str(k), Value::from(v)))
-                .collect(),
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct MainPod {
     pub params: Params,
@@ -149,6 +78,22 @@ fn fill_pad<T: Clone>(v: &mut Vec<T>, pad_value: T, len: usize) {
 }
 
 impl MainPod {
+    pub fn new(
+        params: Params,
+        mut input_signed_pods: Vec<SignedPod>,
+        input_main_pods: Vec<MainPod>,
+        mut statements: Vec<Statement>,
+    ) -> Self {
+        Self::pad_statements(&params, &mut statements, params.max_statements);
+        Self::pad_input_signed_pods(&params, &mut input_signed_pods);
+        Self {
+            params,
+            id: PodId::default(), // TODO
+            input_signed_pods,
+            statements,
+        }
+    }
+
     fn statement_none(params: &Params) -> Statement {
         let mut args = Vec::with_capacity(params.max_statement_args);
         Self::pad_statement_args(&params, &mut args);
@@ -173,56 +118,6 @@ impl MainPod {
             kvs: HashMap::new(),
         };
         fill_pad(pods, pod_none, params.max_input_signed_pods)
-    }
-
-    pub fn compile(params: Params, pod: &frontend::MainPod) -> Self {
-        let mut statements = Vec::new();
-        let mut const_cnt = 0;
-        for front_st in &pod.statements {
-            let mut args = Vec::new();
-            let frontend::Statement(front_typ, front_args) = &front_st.0;
-            for front_arg in front_args {
-                let key = match front_arg {
-                    frontend::StatementArg::Literal(v) => {
-                        let key = format!("_c{}", const_cnt);
-                        let key_hash = hash_str(&key);
-                        const_cnt += 1;
-                        let value_of_args = vec![
-                            StatementArg::Ref(AnchoredKey(SELF, key_hash)),
-                            StatementArg::Literal(Value::from(v)),
-                        ];
-                        statements.push(Statement(NativeStatement::ValueOf, value_of_args));
-                        AnchoredKey(SELF, key_hash)
-                    }
-                    frontend::StatementArg::Ref(k) => AnchoredKey(k.0 .1, hash_str(&k.1)),
-                };
-                args.push(StatementArg::Ref(key));
-                if args.len() > params.max_statement_args {
-                    panic!("too many statement args");
-                }
-            }
-            statements.push(Statement(NativeStatement::from(*front_typ), args));
-            if statements.len() > params.max_statements {
-                panic!("too many statements");
-            }
-        }
-        Self::pad_statements(&params, &mut statements, params.max_statements);
-        let mut input_signed_pods = pod
-            .input_signed_pods
-            .iter()
-            .map(|p| SignedPod::compile(params, p))
-            .collect();
-        Self::pad_input_signed_pods(&params, &mut input_signed_pods);
-        Self {
-            params,
-            id: PodId::default(), // TODO
-            input_signed_pods,
-            statements,
-        }
-    }
-
-    pub fn max_priv_statements(&self) -> usize {
-        self.params.max_statements - self.params.max_public_statements
     }
 
     pub fn input_signed_pods_statements(&self) -> Vec<Vec<Statement>> {
@@ -357,10 +252,10 @@ mod tests {
     #[test]
     fn test_back_0() {
         let params = Params::default();
-        let (front_gov_id, front_pay_stub, front_kyc) = frontend::tests::data_zu_kyc();
-        let gov_id = SignedPod::compile(params, &front_gov_id);
-        let pay_stub = SignedPod::compile(params, &front_pay_stub);
-        let kyc = MainPod::compile(params, &front_kyc);
+        let (front_gov_id, front_pay_stub, front_kyc) = frontend::tests::data_zu_kyc(params);
+        let gov_id = front_gov_id.compile();
+        let pay_stub = front_pay_stub.compile();
+        let kyc = front_kyc.compile();
         // println!("{:#?}", kyc);
 
         let printer = Printer {};

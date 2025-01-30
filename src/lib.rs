@@ -1,7 +1,7 @@
 use hex::{FromHex, FromHexError};
 use plonky2::field::goldilocks_field::GoldilocksField;
 use plonky2::field::types::{Field, PrimeField64};
-use plonky2::hash::{hash_types::HashOut, poseidon::PoseidonHash};
+use plonky2::hash::poseidon::PoseidonHash;
 use plonky2::plonk::config::Hasher;
 use std::fmt;
 
@@ -72,4 +72,33 @@ pub fn hash_str(s: &str) -> Hash {
         })
         .collect();
     Hash(PoseidonHash::hash_no_pad(&input).elements)
+}
+
+#[derive(Clone, Debug, Copy)]
+pub struct Params {
+    pub max_input_signed_pods: usize,
+    pub max_input_main_pods: usize,
+    pub max_statements: usize,
+    pub max_signed_pod_values: usize,
+    pub max_public_statements: usize,
+    pub max_statement_args: usize,
+}
+
+impl Params {
+    pub fn max_priv_statements(&self) -> usize {
+        self.max_statements - self.max_public_statements
+    }
+}
+
+impl Default for Params {
+    fn default() -> Self {
+        Self {
+            max_input_signed_pods: 3,
+            max_input_main_pods: 3,
+            max_statements: 20,
+            max_signed_pod_values: 8,
+            max_public_statements: 10,
+            max_statement_args: 5,
+        }
+    }
 }
