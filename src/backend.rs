@@ -275,7 +275,7 @@ impl MainPod {
 pub struct Printer {}
 
 impl Printer {
-    pub fn fmt_arg(&self, arg: &StatementArg, w: &mut dyn Write) -> io::Result<()> {
+    pub fn fmt_arg(&self, w: &mut dyn Write, arg: &StatementArg) -> io::Result<()> {
         match arg {
             StatementArg::None => write!(w, "none"),
             StatementArg::Literal(v) => write!(w, "{}", v),
@@ -283,7 +283,7 @@ impl Printer {
         }
     }
 
-    pub fn fmt_signed_pod(&self, pod: &SignedPod, w: &mut dyn Write) -> io::Result<()> {
+    pub fn fmt_signed_pod(&self, w: &mut dyn Write, pod: &SignedPod) -> io::Result<()> {
         writeln!(w, "SignedPod ({}):", pod.id)?;
         // for (k, v) in pod.kvs.iter().sorted_by_key(|kv| kv.0) {
         // TODO: print in a stable order
@@ -293,29 +293,29 @@ impl Printer {
         Ok(())
     }
 
-    pub fn fmt_statement(&self, st: &Statement, w: &mut dyn Write) -> io::Result<()> {
+    pub fn fmt_statement(&self, w: &mut dyn Write, st: &Statement) -> io::Result<()> {
         write!(w, "{:?} ", st.0)?;
         for (i, arg) in st.1.iter().enumerate() {
             if i != 0 {
                 write!(w, " ")?;
             }
-            self.fmt_arg(arg, w)?;
+            self.fmt_arg(w, arg)?;
         }
         Ok(())
     }
 
     pub fn fmt_statement_index(
         &self,
+        w: &mut dyn Write,
         st: &Statement,
         index: usize,
-        w: &mut dyn Write,
     ) -> io::Result<()> {
         write!(w, "    {:03}. ", index)?;
-        self.fmt_statement(&st, w)?;
+        self.fmt_statement(w, &st)?;
         write!(w, "\n")
     }
 
-    pub fn fmt_main_pod(&self, pod: &MainPod, w: &mut dyn Write) -> io::Result<()> {
+    pub fn fmt_main_pod(&self, w: &mut dyn Write, pod: &MainPod) -> io::Result<()> {
         writeln!(w, "MainPod ({}):", pod.id)?;
         // TODO
         // writeln!(w, "  input_main_pods:")?;
@@ -331,18 +331,18 @@ impl Printer {
         {
             writeln!(w, "  in sig_pod {:02} (id:{}) statements:", i, pod.id)?;
             for st in statements {
-                self.fmt_statement_index(&st, st_index, w)?;
+                self.fmt_statement_index(w, &st, st_index)?;
                 st_index += 1;
             }
         }
         writeln!(w, "  prv statements:")?;
         for st in pod.prv_statements() {
-            self.fmt_statement_index(&st, st_index, w)?;
+            self.fmt_statement_index(w, &st, st_index)?;
             st_index += 1;
         }
         writeln!(w, "  pub statements:")?;
         for st in pod.pub_statements() {
-            self.fmt_statement_index(&st, st_index, w)?;
+            self.fmt_statement_index(w, &st, st_index)?;
             st_index += 1;
         }
         Ok(())
@@ -365,8 +365,8 @@ mod tests {
 
         let printer = Printer {};
         let mut w = io::stdout();
-        printer.fmt_signed_pod(&gov_id, &mut w).unwrap();
-        printer.fmt_signed_pod(&pay_stub, &mut w).unwrap();
-        printer.fmt_main_pod(&kyc, &mut w).unwrap();
+        printer.fmt_signed_pod(&mut w, &gov_id).unwrap();
+        printer.fmt_signed_pod(&mut w, &pay_stub).unwrap();
+        printer.fmt_main_pod(&mut w, &kyc).unwrap();
     }
 }
