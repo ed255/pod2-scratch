@@ -5,7 +5,7 @@ use std::io::{self, Write};
 use std::iter;
 use strum_macros::FromRepr;
 
-use crate::{Hash, Params, PodId, F};
+use crate::{Hash, Params, PodId, F, NULL};
 
 #[derive(Clone, Copy, Debug, FromRepr, PartialEq, Eq)]
 pub enum NativeStatement {
@@ -50,14 +50,32 @@ pub enum StatementArg {
     Ref(AnchoredKey),
 }
 
+impl StatementArg {
+    pub fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Statement(pub NativeStatement, pub Vec<StatementArg>);
+
+impl Statement {
+    pub fn is_none(&self) -> bool {
+        matches!(self.0, NativeStatement::None)
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct SignedPod {
     pub params: Params,
     pub id: PodId,
     pub kvs: HashMap<Hash, Value>,
+}
+
+impl SignedPod {
+    pub fn is_null(&self) -> bool {
+        self.id.0 == NULL
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -167,7 +185,9 @@ impl MainPod {
     }
 }
 
-pub struct Printer {}
+pub struct Printer {
+    pub skip_none: bool,
+}
 
 impl Printer {
     pub fn fmt_arg(&self, w: &mut dyn Write, arg: &StatementArg) -> io::Result<()> {
@@ -191,10 +211,12 @@ impl Printer {
     pub fn fmt_statement(&self, w: &mut dyn Write, st: &Statement) -> io::Result<()> {
         write!(w, "{:?} ", st.0)?;
         for (i, arg) in st.1.iter().enumerate() {
-            if i != 0 {
-                write!(w, " ")?;
+            if !(self.skip_none && arg.is_none()) {
+                if i != 0 {
+                    write!(w, " ")?;
+                }
+                self.fmt_arg(w, arg)?;
             }
-            self.fmt_arg(w, arg)?;
         }
         Ok(())
     }
@@ -205,9 +227,12 @@ impl Printer {
         st: &Statement,
         index: usize,
     ) -> io::Result<()> {
-        write!(w, "    {:03}. ", index)?;
-        self.fmt_statement(w, &st)?;
-        write!(w, "\n")
+        if !(self.skip_none && st.is_none()) {
+            write!(w, "    {:03}. ", index)?;
+            self.fmt_statement(w, &st)?;
+            write!(w, "\n")?;
+        }
+        Ok(())
     }
 
     pub fn fmt_main_pod(&self, w: &mut dyn Write, pod: &MainPod) -> io::Result<()> {
@@ -224,10 +249,14 @@ impl Printer {
             .zip(pod.input_signed_pods_statements())
             .enumerate()
         {
-            writeln!(w, "  in sig_pod {:02} (id:{}) statements:", i, pod.id)?;
-            for st in statements {
-                self.fmt_statement_index(w, &st, st_index)?;
-                st_index += 1;
+            if !(self.skip_none && pod.is_null()) {
+                writeln!(w, "  in sig_pod {:02} (id:{}) statements:", i, pod.id)?;
+                for st in statements {
+                    self.fmt_statement_index(w, &st, st_index)?;
+                    st_index += 1;
+                }
+            } else {
+                st_index += pod.params.max_signed_pod_values;
             }
         }
         writeln!(w, "  prv statements:")?;
@@ -258,7 +287,7 @@ mod tests {
         let kyc = front_kyc.compile();
         // println!("{:#?}", kyc);
 
-        let printer = Printer {};
+        let printer = Printer { skip_none: true };
         let mut w = io::stdout();
         printer.fmt_signed_pod(&mut w, &gov_id).unwrap();
         printer.fmt_signed_pod(&mut w, &pay_stub).unwrap();
